@@ -7,6 +7,9 @@
 # Generated BAT files (from BprToBat output)
 *_build_parallel.bat
 
+# Screenshots
+*.png
+
 # Editor
 *.swp
 *.swo
