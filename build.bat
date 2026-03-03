@@ -11,8 +11,15 @@ if not exist "%VCVARS%" (
 
 call "%VCVARS%" x86 >nul 2>&1
 
+echo Compiling resources ...
+rc /nologo BprToBat.rc
+if errorlevel 1 (
+    echo [ERROR] Resource compile failed.
+    exit /b 1
+)
+
 echo Compiling BprToBat.exe ...
-cl /EHsc /O2 /Fe:BprToBat.exe BprToBat.cpp
+cl /EHsc /O2 /Fe:BprToBat.exe BprToBat.cpp BprToBat.res
 if errorlevel 1 (
     echo [ERROR] Build failed.
     exit /b 1
