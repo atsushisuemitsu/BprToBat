@@ -31,8 +31,8 @@ struct BprProject {
     std::string projectBaseName;   // e.g. "Gats2120"
     std::vector<std::string> objFiles; // individual OBJ file entries (with dir prefix)
     std::string resFiles, libFiles, libraries, packages;
-    std::string pathCpp, pathPas;
-    std::string cflag1, cflag2, cflag3, pflags, rflags, lflags;
+    std::string pathCpp, pathPas, pathAsm;
+    std::string cflag1, cflag2, cflag3, pflags, rflags, lflags, aflags;
     std::string allobj, alllib;
     std::string debugLibPath, releaseLibPath;
 
@@ -439,6 +439,8 @@ static bool parseBpr(const std::string& bprPath, BprProject& proj) {
             else if (varName == "PACKAGES") proj.packages = varValue;
             else if (varName == "PATHCPP") proj.pathCpp = varValue;
             else if (varName == "PATHPAS") proj.pathPas = varValue;
+            else if (varName == "PATHASM") proj.pathAsm = varValue;
+            else if (varName == "AFLAGS") proj.aflags = varValue;
             else if (varName == "CFLAG1") proj.cflag1 = varValue;
             else if (varName == "CFLAG2") proj.cflag2 = varValue;
             else if (varName == "CFLAG3") proj.cflag3 = varValue;
@@ -583,6 +585,11 @@ static std::vector<std::string> buildSrcDirs(const BprProject& proj) {
         addDir(d);
     }
 
+    // PATHASM
+    for (const auto& d : split(proj.pathAsm, ';')) {
+        addDir(d);
+    }
+
     // Extract -I paths from CFLAG2
     std::vector<std::string> tokens = splitBySpace(proj.cflag2);
     for (const auto& token : tokens) {
@@ -697,6 +704,7 @@ static bool generateBat(const std::string& bprPath,
     std::string pflags_conv = convertFlags(proj.pflags);
     std::string rflags_conv = convertFlags(proj.rflags);
     std::string lflags_conv = convertFlags(proj.lflags);
+    std::string aflags_conv = convertFlags(proj.aflags);
 
     // Extract -D defines from CFLAG2
     std::string cdefines = extractDefines(cflag2_conv);
@@ -800,6 +808,13 @@ static bool generateBat(const std::string& bprPath,
     writeLine(ofs, "set PFLAGS=" + pflags_conv);
     writeLine(ofs);
 
+    // Assembler flags
+    if (!aflags_conv.empty()) {
+        writeLine(ofs, "REM Assembler flags (from .bpr)");
+        writeLine(ofs, "set AFLAGS=" + aflags_conv);
+        writeLine(ofs);
+    }
+
     // Resource flags
     writeLine(ofs, "REM Resource compile flags (from .bpr)");
     writeLine(ofs, "set RFLAGS=" + rflags_conv);
@@ -882,6 +897,7 @@ static bool generateBat(const std::string& bprPath,
     writeLine(ofs, "    >>\"_worker%%i.bat\" echo set CFLAG3=!CFLAG3!");
     writeLine(ofs, "    >>\"_worker%%i.bat\" echo set CDEFINES=!CDEFINES!");
     writeLine(ofs, "    >>\"_worker%%i.bat\" echo set PFLAGS=!PFLAGS!");
+    writeLine(ofs, "    >>\"_worker%%i.bat\" echo set AFLAGS=!AFLAGS!");
     writeLine(ofs, "    >>\"_worker%%i.bat\" echo set OBJDIR=!OBJDIR!");
     writeLine(ofs, "    >>\"_worker%%i.bat\" echo set /a ERRORS=0");
     writeLine(ofs, "    >>\"_worker%%i.bat\" echo set /a COMPILED=0");
@@ -1043,17 +1059,43 @@ static bool generateBat(const std::string& bprPath,
         writeLine(ofs, "REM Generate " + proj.projectBaseName + ".rc with version info");
         writeLine(ofs, "echo Generating " + proj.projectBaseName + ".rc...");
         // Write preamble lines from existing .rc (ICON declarations etc.)
-        if (!proj.rcPreambleLines.empty()) {
-            bool first = true;
+        {
+            // Check if preamble already has an ICON line
+            bool hasIcon = false;
             for (const auto& pline : proj.rcPreambleLines) {
-                std::string redirect = first ? "> " : ">> ";
-                first = false;
-                writeLine(ofs, redirect + proj.projectBaseName + ".rc echo " + pline);
+                std::string upper = pline;
+                for (auto& c : upper) c = toupper((unsigned char)c);
+                if (upper.find("ICON") != std::string::npos &&
+                    upper.find("//") == std::string::npos &&
+                    upper.find("VERSIONINFO") == std::string::npos) {
+                    hasIcon = true;
+                    break;
+                }
             }
-            writeLine(ofs, ">> " + proj.projectBaseName + ".rc echo.");
-        } else {
-            // No existing .rc found - write empty first line
-            writeLine(ofs, "> " + proj.projectBaseName + ".rc echo.");
+
+            bool first = true;
+            // If no ICON in preamble, auto-add one if .ico exists
+            if (!hasIcon) {
+                writeLine(ofs, "if exist \"" + proj.projectBaseName + ".ico\" (");
+                writeLine(ofs, "    > " + proj.projectBaseName + ".rc echo MAINICON ICON \"" + proj.projectBaseName + ".ico\"");
+                writeLine(ofs, "    >> " + proj.projectBaseName + ".rc echo.");
+                writeLine(ofs, ") else (");
+                writeLine(ofs, "    > " + proj.projectBaseName + ".rc echo.");
+                writeLine(ofs, ")");
+                first = false;
+            }
+
+            if (!proj.rcPreambleLines.empty()) {
+                for (const auto& pline : proj.rcPreambleLines) {
+                    std::string redirect = first ? "> " : ">> ";
+                    first = false;
+                    writeLine(ofs, redirect + proj.projectBaseName + ".rc echo " + pline);
+                }
+                writeLine(ofs, ">> " + proj.projectBaseName + ".rc echo.");
+            } else if (first) {
+                // No existing .rc and no .ico found - write empty first line
+                writeLine(ofs, "> " + proj.projectBaseName + ".rc echo.");
+            }
         }
         writeLine(ofs, ">> " + proj.projectBaseName + ".rc echo 1 VERSIONINFO");
         writeLine(ofs, ">> " + proj.projectBaseName + ".rc echo FILEVERSION !VER_MAJOR!,!VER_MINOR!,!VER_RELEASE!,!VER_BUILD!");
@@ -1275,7 +1317,7 @@ static bool generateBat(const std::string& bprPath,
     writeLine(ofs, "set /a \"_WORKER_IDX+=1\"");
     writeLine(ofs);
 
-    writeLine(ofs, "REM Search .cpp / .c / .pas in each source directory");
+    writeLine(ofs, "REM Search .cpp / .c / .pas / .asm in each source directory");
     writeLine(ofs, "for %%d in (%SRCDIRS%) do (");
     writeLine(ofs, "    if exist \"%%d\\%_NAME%.cpp\" (");
     writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo echo Compiling: %%d\\%_NAME%.cpp");
@@ -1296,6 +1338,14 @@ static bool generateBat(const std::string& bprPath,
     writeLine(ofs, "    if exist \"%%d\\%_NAME%.pas\" (");
     writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo echo Compiling: %%d\\%_NAME%.pas");
     writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo \"%%BCB%%\\BIN\\dcc32\" %%PFLAGS%% \"%%d\\%_NAME%.pas\"");
+    writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo if errorlevel 1 set /a ERRORS+=1");
+    writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo set /a COMPILED+=1");
+    writeLine(ofs, "        set /a FILE_COUNT+=1");
+    writeLine(ofs, "        goto :EOF");
+    writeLine(ofs, "    )");
+    writeLine(ofs, "    if exist \"%%d\\%_NAME%.asm\" (");
+    writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo echo Assembling: %%d\\%_NAME%.asm");
+    writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo \"%%BCB%%\\BIN\\tasm32\" %%AFLAGS%% \"%%d\\%_NAME%.asm\", \"%%OBJDIR%%\\%_NAME%.obj\"");
     writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo if errorlevel 1 set /a ERRORS+=1");
     writeLine(ofs, "        >>\"_worker%_WID%.bat\" echo set /a COMPILED+=1");
     writeLine(ofs, "        set /a FILE_COUNT+=1");
